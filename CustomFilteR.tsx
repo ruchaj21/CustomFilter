@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useReducer, useCallback } from 'react';
+import React, { useEffect, useRef, useReducer, useCallback, useState } from 'react';
 import { find, compact } from 'lodash';
 import { FilterBox, FilterChip, DatePicker, CheckboxGroup, MenuItem } from '@uwr/react-widgets';
 import { useSavedSettings } from 'utils/useSavedUiStateSettings';
@@ -20,14 +20,13 @@ type tDateFilterValue = {
   valueTo?: string;
 };
 
-// Internal state shape:  { [FILTER.DATE]?: tDateFilterValue, [FILTER.PRODUCTS]?: number[] }
-type tLocalFilters = {
-  [FILTER.DATE]?: tDateFilterValue;
-  [FILTER.PRODUCTS]?: number[];
-};
+type tLocalFilters = Partial<{
+  [FILTER.DATE]: tDateFilterValue;
+  [FILTER.PRODUCTS]: number[];
+}>;
 
 // ---------------------------------------------------------------------------
-// Reducer (mirrors the FilterBoxExample pattern)
+// Reducer
 // ---------------------------------------------------------------------------
 
 const TYPE_CHANGE = 'change';
@@ -42,13 +41,13 @@ const EMPTY_FILTERS: tLocalFilters = {};
 const valueReducer = (state: tLocalFilters, action: tAction): tLocalFilters => {
   switch (action.type) {
     case TYPE_CHANGE: {
-      const newState = { ...state };
+      const newState = { ...state } as Record<string, unknown>;
       if (action.value === undefined) {
-        delete (newState as Record<string, unknown>)[action.field];
+        delete newState[action.field];
       } else {
-        (newState as Record<string, unknown>)[action.field] = action.value;
+        newState[action.field] = action.value;
       }
-      return newState;
+      return newState as tLocalFilters;
     }
     case TYPE_SET:
       return action.value;
@@ -62,12 +61,9 @@ const setValueAction = (field: string, value: unknown): tAction => ({ type: TYPE
 const resetValuesAction = (value: tLocalFilters = EMPTY_FILTERS): tAction => ({ type: TYPE_SET, value });
 
 // ---------------------------------------------------------------------------
-// Helpers – convert between redux tNotificationsFilter and local UI state
+// Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Build the redux-compatible filter from local UI filter state.
- */
 const buildReduxFilter = (
   currentFilter: tNotificationsFilter,
   localFilters: tLocalFilters,
@@ -77,70 +73,60 @@ const buildReduxFilter = (
     ? { from: dateUi.value, to: dateUi.valueTo ?? dateUi.value }
     : undefined;
 
-  const products: tNotificationsFilter[typeof FILTER.PRODUCTS] =
-    (localFilters[FILTER.PRODUCTS] as tNotificationsFilter[typeof FILTER.PRODUCTS]) ?? undefined;
+  const products = localFilters[FILTER.PRODUCTS];
 
   return { ...currentFilter, date, products };
 };
 
-/**
- * Restore local UI state from the persisted saved settings (previously
- * stored as a ReactFilterSentence FilterValue[] array).
- *
- * The saved format was:
- *   [{ key: FILTER.DATE, value: 'YYYY-MM-DD', valueTo?: 'YYYY-MM-DD' },
- *    { key: FILTER.PRODUCTS, value: number[] }]
- *
- * We map that into the new tLocalFilters shape.
- */
 const restoreFromSaved = (saved: unknown[]): tLocalFilters => {
   if (!Array.isArray(saved) || !saved.length) return EMPTY_FILTERS;
 
   const result: tLocalFilters = {};
 
-  const dateEntry = find(saved, { key: FILTER.DATE }) as tDateFilterValue & { key: string } | undefined;
+  const dateEntry = find(saved, { key: FILTER.DATE }) as (tDateFilterValue & { key: string }) | undefined;
   if (dateEntry?.value) {
     result[FILTER.DATE] = { value: dateEntry.value, valueTo: dateEntry.valueTo };
   }
 
   const productsEntry = find(saved, { key: FILTER.PRODUCTS }) as { key: string; value?: number[] } | undefined;
-  if (productsEntry?.value) {
+  if (productsEntry?.value?.length) {
     result[FILTER.PRODUCTS] = productsEntry.value;
   }
 
   return result;
 };
 
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
-
 const NOOP = () => {};
 
-/** Controlled DatePicker wrapper used inside a FilterChip popover */
+// ---------------------------------------------------------------------------
+// DateRangeChip
+// ---------------------------------------------------------------------------
+
 const DateRangeChip: React.FC<{
   field: string;
   value: tDateFilterValue;
   dispatch: React.Dispatch<tAction>;
 }> = ({ field, value, dispatch }) => {
-  const [localFrom, setLocalFrom] = React.useState(value?.value ?? '');
-  const [localTo, setLocalTo] = React.useState(value?.valueTo ?? '');
+  const [localFrom, setLocalFrom] = useState(value?.value ?? '');
+  const [localTo, setLocalTo] = useState(value?.valueTo ?? '');
 
-  // Keep local state in sync when the chip is re-opened with existing value
+  // Sync local state when parent value changes (e.g. on reset)
   useEffect(() => {
     setLocalFrom(value?.value ?? '');
     setLocalTo(value?.valueTo ?? '');
   }, [value?.value, value?.valueTo]);
 
-  const handleApply = () => {
+  const handleApply = useCallback(() => {
     if (localFrom) {
       dispatch(setValueAction(field, { value: localFrom, valueTo: localTo || localFrom }));
     } else {
       dispatch(deleteValueAction(field));
     }
-  };
+  }, [field, localFrom, localTo, dispatch]);
 
-  const handleDelete = () => dispatch(deleteValueAction(field));
+  const handleDelete = useCallback(() => {
+    dispatch(deleteValueAction(field));
+  }, [field, dispatch]);
 
   const displayLabel = (() => {
     const parts = compact([value?.value, value?.valueTo]);
@@ -149,7 +135,6 @@ const DateRangeChip: React.FC<{
 
   return (
     <FilterChip
-      key={field}
       id={`filter-chip-${field}`}
       label="Date"
       value={displayLabel}
@@ -170,9 +155,13 @@ const DateRangeChip: React.FC<{
           dateFormat={DatePicker.generateDateFormat('en')}
           style={{ marginBottom: '8px' }}
           calendarButtonProps={{
-            'aria-label': localFrom ? `Selected date is ${localFrom}. Choose date` : 'Choose date',
+            'aria-label': localFrom
+              ? `Selected date is ${localFrom}. Choose date`
+              : 'Choose date',
           }}
-          onChange={({ target: { value: v } }: { target: { value: string } }) => setLocalFrom(v)}
+          onChange={({ target: { value: v } }: { target: { value: string } }) =>
+            setLocalFrom(v)
+          }
         />
         <DatePicker
           id="filter-date-to"
@@ -181,24 +170,32 @@ const DateRangeChip: React.FC<{
           value={localTo}
           dateFormat={DatePicker.generateDateFormat('en')}
           calendarButtonProps={{
-            'aria-label': localTo ? `Selected date is ${localTo}. Choose date` : 'Choose date',
+            'aria-label': localTo
+              ? `Selected date is ${localTo}. Choose date`
+              : 'Choose date',
           }}
-          onChange={({ target: { value: v } }: { target: { value: string } }) => setLocalTo(v)}
+          onChange={({ target: { value: v } }: { target: { value: string } }) =>
+            setLocalTo(v)
+          }
         />
       </FilterChip.PopoverContent>
     </FilterChip>
   );
 };
 
-/** Multi-select chip for Products */
+// ---------------------------------------------------------------------------
+// ProductsChip
+// ---------------------------------------------------------------------------
+
 const ProductsChip: React.FC<{
   field: string;
   value: number[];
   options: { label: string; value: number }[];
   dispatch: React.Dispatch<tAction>;
 }> = ({ field, value, options, dispatch }) => {
-  const [localValue, setLocalValue] = React.useState<Set<number>>(new Set(value));
+  const [localValue, setLocalValue] = useState<Set<number>>(() => new Set(value));
 
+  // Sync when parent value changes (e.g. on reset)
   useEffect(() => {
     setLocalValue(new Set(value));
   }, [value]);
@@ -209,31 +206,35 @@ const ProductsChip: React.FC<{
     checked: localValue.has(optVal),
   }));
 
-  const handleChange = ({ id, checked }: { id: string; checked: boolean }) => {
-    const numId = Number(id.replace('filter-products-', ''));
-    const next = new Set(localValue);
-    checked ? next.add(numId) : next.delete(numId);
-    setLocalValue(next);
-  };
+  const handleChange = useCallback(
+    ({ id, checked }: { id: string; checked: boolean }) => {
+      const numId = Number(id.replace('filter-products-', ''));
+      setLocalValue((prev) => {
+        const next = new Set(prev);
+        checked ? next.add(numId) : next.delete(numId);
+        return next;
+      });
+    },
+    [],
+  );
 
-  const handleApply = () => {
+  const handleApply = useCallback(() => {
     const selected = Array.from(localValue);
     if (selected.length) {
       dispatch(setValueAction(field, selected));
     } else {
       dispatch(deleteValueAction(field));
     }
-  };
+  }, [field, localValue, dispatch]);
 
-  const handleDelete = () => dispatch(deleteValueAction(field));
+  const handleDelete = useCallback(() => {
+    dispatch(deleteValueAction(field));
+  }, [field, dispatch]);
 
-  const displayLabel = value.length
-    ? `${value.length} selected`
-    : undefined;
+  const displayLabel = value.length ? `${value.length} selected` : undefined;
 
   return (
     <FilterChip
-      key={field}
       id={`filter-chip-${field}`}
       label="Products"
       value={displayLabel}
@@ -247,7 +248,7 @@ const ProductsChip: React.FC<{
         applyButtonText="Apply"
       >
         <CheckboxGroup
-          id={`filter-products-group`}
+          id="filter-products-group"
           checkBoxes={checkboxes}
           alignment="vertical"
           groupLabelTagName="h3"
@@ -272,23 +273,33 @@ const selector = (state: tRootState) => ({
 // Main component
 // ---------------------------------------------------------------------------
 
+const ALL_FILTER_FIELDS = [FILTER.DATE, FILTER.PRODUCTS] as const;
+
+const FILTER_LABELS: Record<string, string> = {
+  [FILTER.DATE]: 'Date',
+  [FILTER.PRODUCTS]: 'Products',
+};
+
+const FILTER_DEFAULTS: Record<string, unknown> = {
+  [FILTER.DATE]: {} as tDateFilterValue,
+  [FILTER.PRODUCTS]: [] as number[],
+};
+
 export const ProductsSentFilter: React.FC = () => {
-  const dispatch: tDispatch = useDispatch();
+  const reduxDispatch: tDispatch = useDispatch();
   const [savedValue, saveValue] = useSavedSettings<unknown[]>('notifications-query') ?? [];
 
   const { currentFilter, productsConfig, connected } = useSelector(selector, shallowEqual);
 
-  // Initialise local filter state from saved settings
   const initFilters: tLocalFilters = restoreFromSaved(savedValue ?? []);
   const [values, dispatchValueChange] = useReducer(valueReducer, initFilters);
 
   const isLoaded = useRef(false);
 
-  // Persist + push to redux whenever local filters change
+  // ---- Persist + push to redux on every local change ---------------------
+
   const syncToRedux = useCallback(
     (localFilters: tLocalFilters) => {
-      // Convert local state back to the legacy saved format so the key
-      // 'notifications-query' stays backward-compatible if ever rolled back.
       const legacyFormat: unknown[] = [];
       if (localFilters[FILTER.DATE]?.value) {
         legacyFormat.push({
@@ -301,16 +312,17 @@ export const ProductsSentFilter: React.FC = () => {
         legacyFormat.push({ key: FILTER.PRODUCTS, value: localFilters[FILTER.PRODUCTS] });
       }
       saveValue(legacyFormat);
-      dispatch(setNotificationsFilter(buildReduxFilter(currentFilter, localFilters)));
+      reduxDispatch(setNotificationsFilter(buildReduxFilter(currentFilter, localFilters)));
     },
-    [currentFilter, dispatch, saveValue],
+    [currentFilter, reduxDispatch, saveValue],
   );
 
-  // Load saved filters once connected (mirrors original setTimeout retry logic)
+  // ---- Load saved filters once connected ---------------------------------
+
   const loadFilters = useDynamicCallback(() => {
     if (!!connected && !isLoaded.current) {
       isLoaded.current = true;
-      dispatch(setNotificationsFilter(buildReduxFilter(currentFilter, values)));
+      reduxDispatch(setNotificationsFilter(buildReduxFilter(currentFilter, values)));
     } else {
       setTimeout(loadFilters, 1000);
     }
@@ -320,7 +332,8 @@ export const ProductsSentFilter: React.FC = () => {
     setTimeout(loadFilters, 1000);
   }, [loadFilters]);
 
-  // Sync to redux whenever local values change (after initial load)
+  // ---- Sync on values change (skip first render) -------------------------
+
   const prevValuesRef = useRef(values);
   useEffect(() => {
     if (prevValuesRef.current !== values) {
@@ -332,30 +345,40 @@ export const ProductsSentFilter: React.FC = () => {
   // ---- FilterBox plumbing ------------------------------------------------
 
   const usedFilters = Object.keys(values) as string[];
-  const ALL_FILTER_FIELDS = [FILTER.DATE, FILTER.PRODUCTS];
   const availableFilters = ALL_FILTER_FIELDS.filter((f) => !usedFilters.includes(f));
 
-  const handleFilterClick = ({ currentTarget }: { currentTarget: HTMLElement }) => {
-    const field = currentTarget.dataset.field as string;
-    // Default value per filter type
-    const defaultValue =
-      field === FILTER.DATE ? ({} as tDateFilterValue) : ([] as number[]);
-    dispatchValueChange(setValueAction(field, defaultValue));
-  };
+  // FIX: capture field immediately from the MenuItem's data-field attribute
+  // using a closure per field — avoids synthetic event nullification and
+  // avoids relying on currentTarget being available asynchronously.
+  const handleFilterClick = useCallback(
+    ({ currentTarget }: React.MouseEvent<HTMLElement>) => {
+      // Capture field synchronously before event is recycled
+      const field = currentTarget.getAttribute('data-field');
+      if (!field) return;
+      dispatchValueChange(setValueAction(field, FILTER_DEFAULTS[field]));
+    },
+    [],
+  );
 
-  const handleUndoButtonClick = () => dispatchValueChange(resetValuesAction(initFilters));
   const hasFilters = usedFilters.length > 0;
+
+  const handleUndoButtonClick = useCallback(
+    () => dispatchValueChange(resetValuesAction(initFilters)),
+    [initFilters],
+  );
+
   const handleClearButtonClick = hasFilters
     ? () => dispatchValueChange(resetValuesAction())
     : undefined;
 
+  // MenuItem list — only fields not yet active
   const filterMenuItems = availableFilters.map((field) => (
     <MenuItem key={field} data-field={field}>
-      {field === FILTER.DATE ? 'Date' : 'Products'}
+      {FILTER_LABELS[field]}
     </MenuItem>
   ));
 
-  // Render active filter chips
+  // Active filter chips
   const filterChips = usedFilters.map((field) => {
     if (field === FILTER.DATE) {
       return (
