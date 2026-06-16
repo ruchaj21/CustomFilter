@@ -16,6 +16,26 @@ Your task is to take legacy React 15/16 code written using CommonJS and Class Co
 - **Render Methods:** Remove the `render()` method wrapper. Return the JSX directly from the functional component.
 - **Constructor & Bindings:** Remove `constructor()`, `super(props)`, and all manual method bindings (e.g., `this.myMethod = this.myMethod.bind(this)`).
 
+## 7. Application Entry Point (React 18 Root API)
+When refactoring the main application entry file (typically `index.js`, `index.tsx`, `main.js`, or `main.tsx`), you MUST upgrade to the React 18 `createRoot` API.
+
+- **Update Imports:** - *Remove:* `import ReactDOM from 'react-dom';` (or `require('react-dom')`)
+  - *Add:* `import { createRoot } from 'react-dom/client';`
+- **Migrate the Render Method:**
+  - *Legacy Pattern to Remove:* `ReactDOM.render(<App />, document.getElementById('root'));`
+  - *Modern Pattern to Implement:*
+    ```javascript
+    const container = document.getElementById('root');
+    const root = createRoot(container);
+    root.render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>
+    );
+    ```
+- **Strict Mode:** Always wrap the root component in `<React.StrictMode>` if it isn't already, to help catch unsafe lifecycles and legacy string refs during development.
+
+
 ## 3. State & Lifecycles (Hooks)
 - **State:** Convert `this.state` and `this.setState` to multiple, logically grouped `useState` or `useReducer` hooks.
 - **Lifecycles:** 
@@ -23,6 +43,8 @@ Your task is to take legacy React 15/16 code written using CommonJS and Class Co
   - Replace `componentDidUpdate` with `useEffect` featuring the correct dependency array.
   - Replace `componentWillUnmount` with a cleanup return function inside `useEffect`.
 - **Unsafe Methods:** Completely remove `UNSAFE_componentWillMount`, `componentWillReceiveProps`, and `componentWillUpdate`. Map their logic to derived state during render or inside a `useEffect`.
+
+
 
 ## 4. Refs & Event Handlers
 - **Refs:** Convert string refs (`ref="myRef"`) and `React.createRef()` to the `useRef()` hook. Update all access patterns from `this.refs.myRef` to `myRef.current`.
